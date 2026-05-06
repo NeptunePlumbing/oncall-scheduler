@@ -1000,29 +1000,56 @@ function clearAllData(){
   save();renderCalendar();renderTechTable();
 }
 
-// Handle redirect after login
 async function start(){
+  // Show a visible status so we know the script is running
+  document.body.innerHTML += '<div id="dbg" style="position:fixed;bottom:0;left:0;right:0;background:#1a1a1a;color:#fff;font-size:11px;padding:8px 12px;z-index:9999;font-family:monospace;max-height:120px;overflow-y:auto;"></div>';
+  function dbg(msg){
+    console.log(msg);
+    const el=document.getElementById('dbg');
+    if(el)el.innerHTML+=msg+'<br>';
+  }
+
   try{
-    // Must initialize before any other MSAL call
+    dbg('1. Initializing MSAL...');
     await msalInstance.initialize();
-    // Handle the redirect response if returning from Microsoft login page
-    const response = await msalInstance.handleRedirectPromise();
-    if(response && response.account){
-      // We just came back from a successful login redirect
-      // Set the active account so getToken() works
-      msalInstance.setActiveAccount(response.account);
-      console.log('Signed in as:', response.account.username);
+    dbg('2. MSAL initialized. Handling redirect...');
+
+    let response=null;
+    try{
+      response = await msalInstance.handleRedirectPromise();
+    }catch(e){
+      dbg('Redirect error: '+e.message);
     }
-    await initApp();
+
+    dbg('3. Redirect handled. Response: '+(response?'YES account='+response.account.username:'null'));
+
+    if(response && response.account){
+      msalInstance.setActiveAccount(response.account);
+      dbg('4. Active account set: '+response.account.username);
+    }
+
+    const allAccounts = msalInstance.getAllAccounts();
+    dbg('5. All accounts: '+allAccounts.length);
+
+    const activeAccount = msalInstance.getActiveAccount();
+    dbg('6. Active account: '+(activeAccount?activeAccount.username:'none'));
+
+    if(allAccounts.length > 0 || activeAccount){
+      dbg('7. Calling initApp...');
+      await initApp();
+      dbg('8. initApp complete.');
+    } else {
+      dbg('7. No accounts found - showing sign in banner.');
+      document.getElementById('authBanner').style.display='flex';
+      document.getElementById('appShell').style.display='none';
+    }
   }catch(e){
     console.error('Start error:',e);
-    // Show sign in banner on any error
     document.getElementById('authBanner').style.display='flex';
     document.getElementById('appShell').style.display='none';
   }
 }
 
-// Also fix getToken to use active account or first account
 async function getToken(){
   let account = msalInstance.getActiveAccount();
   if(!account){
