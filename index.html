@@ -352,17 +352,7 @@ let spSiteId=null;
 let spListId=null;
 let spItemId=null;
 
-async function getToken(){
-  const accounts=msalInstance.getAllAccounts();
-  if(!accounts.length)throw new Error('Not signed in');
-  try{
-    const res=await msalInstance.acquireTokenSilent({scopes:SCOPES,account:accounts[0]});
-    return res.accessToken;
-  }catch(e){
-    await msalInstance.acquireTokenRedirect({scopes:SCOPES});
-    return null;
-  }
-}
+// getToken defined below in start block
 
 async function signIn(){
   try{
@@ -377,13 +367,17 @@ function signOut(){
 }
 
 async function initApp(){
-  const accounts=msalInstance.getAllAccounts();
-  if(!accounts.length){
-    document.getElementById('authBanner').style.display='flex';
-    document.getElementById('appShell').style.display='none';
-    return;
+  let account = msalInstance.getActiveAccount();
+  if(!account){
+    const accounts=msalInstance.getAllAccounts();
+    if(!accounts.length){
+      document.getElementById('authBanner').style.display='flex';
+      document.getElementById('appShell').style.display='none';
+      return;
+    }
+    account=accounts[0];
+    msalInstance.setActiveAccount(account);
   }
-  const account=accounts[0];
   document.getElementById('authUser').textContent=account.name||account.username;
   document.getElementById('authBanner').style.display='none';
   document.getElementById('appShell').style.display='flex';
@@ -1011,16 +1005,41 @@ async function start(){
   try{
     // Must initialize before any other MSAL call
     await msalInstance.initialize();
-    // Handle the redirect response if returning from login
+    // Handle the redirect response if returning from Microsoft login page
     const response = await msalInstance.handleRedirectPromise();
-    if(response){
-      console.log('Redirect response received, user:', response.account.username);
+    if(response && response.account){
+      // We just came back from a successful login redirect
+      // Set the active account so getToken() works
+      msalInstance.setActiveAccount(response.account);
+      console.log('Signed in as:', response.account.username);
     }
     await initApp();
   }catch(e){
     console.error('Start error:',e);
+    // Show sign in banner on any error
+    document.getElementById('authBanner').style.display='flex';
+    document.getElementById('appShell').style.display='none';
   }
 }
+
+// Also fix getToken to use active account or first account
+async function getToken(){
+  let account = msalInstance.getActiveAccount();
+  if(!account){
+    const accounts = msalInstance.getAllAccounts();
+    if(!accounts.length) throw new Error('Not signed in');
+    account = accounts[0];
+    msalInstance.setActiveAccount(account);
+  }
+  try{
+    const res=await msalInstance.acquireTokenSilent({scopes:SCOPES,account});
+    return res.accessToken;
+  }catch(e){
+    await msalInstance.acquireTokenRedirect({scopes:SCOPES});
+    return null;
+  }
+}
+
 start();
 </script>
 </body></html>
