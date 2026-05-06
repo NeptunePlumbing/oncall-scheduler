@@ -359,20 +359,19 @@ async function getToken(){
     const res=await msalInstance.acquireTokenSilent({scopes:SCOPES,account:accounts[0]});
     return res.accessToken;
   }catch(e){
-    const res=await msalInstance.acquireTokenPopup({scopes:SCOPES});
-    return res.accessToken;
+    await msalInstance.acquireTokenRedirect({scopes:SCOPES});
+    return null;
   }
 }
 
 async function signIn(){
   try{
-    await msalInstance.loginPopup({scopes:SCOPES});
-    await initApp();
+    await msalInstance.loginRedirect({scopes:SCOPES});
   }catch(e){console.error('Sign in failed:',e);}
 }
 
 function signOut(){
-  msalInstance.logoutPopup();
+  msalInstance.logoutRedirect();
   document.getElementById('appShell').style.display='none';
   document.getElementById('authBanner').style.display='flex';
 }
