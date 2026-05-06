@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html><head><meta charset="UTF-8">
 <title>Neptune On-Call Scheduler</title>
+<!-- Microsoft Authentication Library (MSAL) for Graph API authentication -->
+<script src="https://alcdn.msauth.net/browser/2.38.3/js/msal-browser.min.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:system-ui,sans-serif;font-size:14px;color:#1a1a1a;background:#f5f4f0}
@@ -110,11 +112,19 @@ input:focus,select:focus{outline:2px solid #378ADD;outline-offset:1px}
 .save-indicator.saving{color:#854F0B}
 .save-indicator.saved{color:#3B6D11}
 .save-indicator.error{color:#A32D2D}
-@media print{.topbar,.nav,.no-print{display:none!important}.content{padding:0}body{background:#fff}}
+.auth-banner{background:#E6F1FB;border-bottom:0.5px solid #B5D4F4;padding:10px 18px;display:flex;align-items:center;justify-content:space-between;font-size:13px}
+.auth-user{font-size:12px;color:#5f5e5a}
+@media print{.topbar,.nav,.no-print,.auth-banner{display:none!important}.content{padding:0}body{background:#fff}}
 </style>
 </head>
 <body>
-<div class="app">
+<div id="authBanner" class="auth-banner" style="display:none;">
+  <div>
+    <strong>Sign in required</strong> — Please sign in with your Neptune Plumbing Microsoft 365 account to access the scheduler.
+  </div>
+  <button class="btn primary sm" onclick="signIn()">Sign In</button>
+</div>
+<div class="app" id="appShell" style="display:none;">
   <div class="topbar">
     <div class="topbar-left">
       <div class="logo">NP</div>
@@ -131,7 +141,9 @@ input:focus,select:focus{outline:2px solid #378ADD;outline-offset:1px}
       <button class="nav-btn" onclick="showPanel('generate')">Generate</button>
     </div>
     <div class="flex-row no-print">
+      <span class="auth-user" id="authUser"></span>
       <button class="btn sm" onclick="window.print()">Print / PDF</button>
+      <button class="btn sm" onclick="signOut()">Sign Out</button>
     </div>
   </div>
   <div class="content">
@@ -281,7 +293,6 @@ input:focus,select:focus{outline:2px solid #378ADD;outline-offset:1px}
     </div>
   </div>
 </div>
-
 <div class="modal-overlay" id="overrideModal" style="display:none;">
   <div class="modal">
     <div class="modal-title" id="overrideModalTitle">Edit Day Assignment</div>
@@ -296,7 +307,6 @@ input:focus,select:focus{outline:2px solid #378ADD;outline-offset:1px}
     </div>
   </div>
 </div>
-
 <div class="modal-overlay" id="mgrOverrideModal" style="display:none;">
   <div class="modal">
     <div class="modal-title" id="mgrOverrideTitle">Override Manager — Week</div>
@@ -313,65 +323,134 @@ input:focus,select:focus{outline:2px solid #378ADD;outline-offset:1px}
 </div>
 
 <script>
-// ═══════════════════════════════════════════════════════════════════
-// CONFIGURATION — IT ADMIN: Replace the URL below with your
-// SharePoint site URL before deploying.
-// Example: https://neptuneplumbing.sharepoint.com/sites/ServiceOps
-// ═══════════════════════════════════════════════════════════════════
-const SHAREPOINT_SITE_URL = 'https://neptuneplumbingnet.sharepoint.com/sites/WeeklyServiceMeeting';
-const LIST_NAME = 'OnCallSchedulerData';
-const ITEM_TITLE = 'SchedulerState';
+// ═══════════════════════════════════════════════════════════════
+// CONFIGURATION — DO NOT EDIT BELOW THIS LINE
+// ═══════════════════════════════════════════════════════════════
+const CLIENT_ID   = '5f698f6e-799f-492a-8ad9-0590cbe19a31';
+const TENANT_ID   = 'df8e83b4-0074-4b04-a3d0-2d651d6a5317';
+const SITE_URL    = 'https://neptuneplumbingnet.sharepoint.com/sites/WeeklyServiceMeeting';
+const LIST_NAME   = 'OnCallSchedulerData';
+const ITEM_TITLE  = 'SchedulerState';
+const GRAPH_BASE  = 'https://graph.microsoft.com/v1.0';
+const SCOPES      = ['Sites.ReadWrite.All','Lists.ReadWrite.All','User.Read'];
+// ═══════════════════════════════════════════════════════════════
 
-// ── SharePoint Storage Layer ──────────────────────────────────────
-// Uses the SharePoint REST API with the logged-in user's credentials.
-// No API keys or passwords needed — authentication is handled by
-// Microsoft 365 automatically since the page lives in SharePoint.
+// ── MSAL Authentication Setup ────────────────────────────────────
+const msalConfig={
+  auth:{
+    clientId:CLIENT_ID,
+    authority:`https://login.microsoftonline.com/${TENANT_ID}`,
+    redirectUri:window.location.origin+window.location.pathname
+  },
+  cache:{cacheLocation:'sessionStorage',storeAuthStateInCookie:false}
+};
+const msalInstance=new msal.PublicClientApplication(msalConfig);
+let graphToken=null;
+let spSiteId=null;
+let spListId=null;
+let spItemId=null;
 
-let spItemId = null; // cached ID of the list item once found/created
-
-function spHeaders(extra){
-  return Object.assign({
-    'Accept':'application/json;odata=nometadata',
-    'Content-Type':'application/json;odata=nometadata'
-  }, extra||{});
+async function getToken(){
+  const accounts=msalInstance.getAllAccounts();
+  if(!accounts.length)throw new Error('Not signed in');
+  try{
+    const res=await msalInstance.acquireTokenSilent({scopes:SCOPES,account:accounts[0]});
+    return res.accessToken;
+  }catch(e){
+    const res=await msalInstance.acquireTokenPopup({scopes:SCOPES});
+    return res.accessToken;
+  }
 }
 
-async function spGetDigest(){
-  const r=await fetch(`${SHAREPOINT_SITE_URL}/_api/contextinfo`,{
-    method:'POST',headers:{'Accept':'application/json;odata=nometadata'}
+async function signIn(){
+  try{
+    await msalInstance.loginPopup({scopes:SCOPES});
+    await initApp();
+  }catch(e){console.error('Sign in failed:',e);}
+}
+
+function signOut(){
+  msalInstance.logoutPopup();
+  document.getElementById('appShell').style.display='none';
+  document.getElementById('authBanner').style.display='flex';
+}
+
+async function initApp(){
+  const accounts=msalInstance.getAllAccounts();
+  if(!accounts.length){
+    document.getElementById('authBanner').style.display='flex';
+    document.getElementById('appShell').style.display='none';
+    return;
+  }
+  const account=accounts[0];
+  document.getElementById('authUser').textContent=account.name||account.username;
+  document.getElementById('authBanner').style.display='none';
+  document.getElementById('appShell').style.display='flex';
+  await loadState();
+  ensureMasterOrder();
+  syncQueues();
+  renderCalendar();
+}
+
+// ── Graph API Storage Layer ───────────────────────────────────────
+async function graphFetch(url,options={}){
+  const token=await getToken();
+  const res=await fetch(url,{
+    ...options,
+    headers:{
+      'Authorization':`Bearer ${token}`,
+      'Content-Type':'application/json',
+      ...(options.headers||{})
+    }
   });
-  const d=await r.json();
-  return d.FormDigestValue;
+  if(!res.ok){
+    const text=await res.text();
+    throw new Error(`Graph API error ${res.status}: ${text}`);
+  }
+  if(res.status===204)return null;
+  return res.json();
+}
+
+async function getSiteId(){
+  if(spSiteId)return spSiteId;
+  const hostname=new URL(SITE_URL).hostname;
+  const sitePath=new URL(SITE_URL).pathname;
+  const data=await graphFetch(`${GRAPH_BASE}/sites/${hostname}:${sitePath}`);
+  spSiteId=data.id;
+  return spSiteId;
+}
+
+async function getListId(){
+  if(spListId)return spListId;
+  const siteId=await getSiteId();
+  const data=await graphFetch(`${GRAPH_BASE}/sites/${siteId}/lists?$filter=displayName eq '${LIST_NAME}'`);
+  if(!data.value||!data.value.length)throw new Error(`List "${LIST_NAME}" not found`);
+  spListId=data.value[0].id;
+  return spListId;
 }
 
 async function loadState(){
   setSaveIndicator('loading');
   try{
-    const url=`${SHAREPOINT_SITE_URL}/_api/web/lists/getbytitle('${LIST_NAME}')/items?$filter=Title eq '${ITEM_TITLE}'&$select=Id,SchedulerJSON`;
-    const r=await fetch(url,{headers:spHeaders()});
-    if(!r.ok)throw new Error('List fetch failed: '+r.status);
-    const d=await r.json();
-    if(d.value&&d.value.length>0){
-      spItemId=d.value[0].Id;
-      const json=d.value[0].SchedulerJSON;
+    const siteId=await getSiteId();
+    const listId=await getListId();
+    const data=await graphFetch(`${GRAPH_BASE}/sites/${siteId}/lists/${listId}/items?$filter=fields/Title eq '${ITEM_TITLE}'&$expand=fields`);
+    if(data.value&&data.value.length>0){
+      spItemId=data.value[0].id;
+      const json=data.value[0].fields.SchedulerJSON;
       if(json)S=JSON.parse(json);
-      setSaveIndicator('');
-    }else{
-      // No item yet — will be created on first save
-      setSaveIndicator('');
     }
+    setSaveIndicator('');
   }catch(e){
-    console.error('SharePoint load error:',e);
+    console.error('Load error:',e);
     setSaveIndicator('error');
-    showAlert('schedAlert','Could not connect to SharePoint. Check that the site URL and list are configured correctly.','error');
-    // Fall back to localStorage so the app still works
+    showAlert('schedAlert','Could not load data from SharePoint. Check your connection and try refreshing.','error');
     try{const r=localStorage.getItem('neptune_fallback');if(r)S=JSON.parse(r);}catch(_){}
   }
 }
 
 let saveTimer=null;
 function save(){
-  // Debounce saves by 800ms to avoid hammering the API
   clearTimeout(saveTimer);
   saveTimer=setTimeout(()=>_doSave(),800);
 }
@@ -379,48 +458,40 @@ function save(){
 async function _doSave(){
   setSaveIndicator('saving');
   const json=JSON.stringify(S);
-  // Also write to localStorage as a fallback
   try{localStorage.setItem('neptune_fallback',json);}catch(_){}
   try{
-    const digest=await spGetDigest();
-    const body=JSON.stringify({Title:ITEM_TITLE,SchedulerJSON:json});
+    const siteId=await getSiteId();
+    const listId=await getListId();
+    const fields={Title:ITEM_TITLE,SchedulerJSON:json};
     if(spItemId){
-      // Update existing item
-      const r=await fetch(
-        `${SHAREPOINT_SITE_URL}/_api/web/lists/getbytitle('${LIST_NAME}')/items(${spItemId})`,
-        {method:'POST',headers:spHeaders({'X-RequestDigest':digest,'IF-MATCH':'*','X-HTTP-Method':'MERGE'}),body}
-      );
-      if(!r.ok)throw new Error('Update failed: '+r.status);
+      await graphFetch(`${GRAPH_BASE}/sites/${siteId}/lists/${listId}/items/${spItemId}/fields`,{
+        method:'PATCH',body:JSON.stringify(fields)
+      });
     }else{
-      // Create new item
-      const r=await fetch(
-        `${SHAREPOINT_SITE_URL}/_api/web/lists/getbytitle('${LIST_NAME}')/items`,
-        {method:'POST',headers:spHeaders({'X-RequestDigest':digest}),body}
-      );
-      if(!r.ok)throw new Error('Create failed: '+r.status);
-      const d=await r.json();
-      spItemId=d.Id;
+      const res=await graphFetch(`${GRAPH_BASE}/sites/${siteId}/lists/${listId}/items`,{
+        method:'POST',body:JSON.stringify({fields})
+      });
+      spItemId=res.id;
     }
     setSaveIndicator('saved');
-    setTimeout(()=>setSaveIndicator(''),2000);
+    setTimeout(()=>setSaveIndicator(''),2500);
   }catch(e){
-    console.error('SharePoint save error:',e);
+    console.error('Save error:',e);
     setSaveIndicator('error');
   }
 }
 
 function setSaveIndicator(state){
-  const el=document.getElementById('saveIndicator');
-  if(!el)return;
+  const el=document.getElementById('saveIndicator');if(!el)return;
   el.className='save-indicator';
-  if(state==='loading'){el.textContent='Loading…';}
+  if(state==='loading')el.textContent='Loading…';
   else if(state==='saving'){el.className='save-indicator saving';el.textContent='Saving…';}
   else if(state==='saved'){el.className='save-indicator saved';el.textContent='Saved ✓';}
   else if(state==='error'){el.className='save-indicator error';el.textContent='Save error — check connection';}
-  else{el.textContent='';}
+  else el.textContent='';
 }
 
-// ── App State ─────────────────────────────────────────────────────
+// ── App State ────────────────────────────────────────────────────
 const HOLIDAYS=[
   {key:'new_years_day',name:"New Year's Day",month:1,day:1},
   {key:'memorial_day',name:"Memorial Day",rule:'last_monday_may'},
@@ -431,7 +502,6 @@ const HOLIDAYS=[
   {key:'christmas',name:"Christmas Day",month:12,day:25},
   {key:'new_years_eve',name:"New Year's Eve",month:12,day:31}
 ];
-
 let S={
   technicians:[],schedules:{},overrides:{},
   rotationState:{wdQueue:[],weQueue:[],trQueue:[],mgQueue:[]},
@@ -452,7 +522,6 @@ function tName(id){const t=getTech(id);return t?t.name:'—';}
 function isBirthday(t,y,m,d){if(!t||!t.birthday)return false;const[bm,bd]=t.birthday.split('-').map(Number);return bm===m&&bd===d;}
 function isUnavail(t,y,m,d,ds){return !t||isBirthday(t,y,m,d)||hasDayOff(t.id,ds);}
 function hasDayOff(id,ds){return(S.daysOff[id]||[]).includes(ds);}
-
 function getMondayKey(y,m,d){
   const dt=new Date(y,m-1,d);const day=dt.getDay();
   const diff=day===0?-6:1-day;dt.setDate(dt.getDate()+diff);
@@ -471,7 +540,6 @@ function holsInMonth(y,m){
     return dt&&dt.getFullYear()===y&&dt.getMonth()+1===m?{...h,day:dt.getDate()}:null;
   }).filter(Boolean);
 }
-
 function ensureMasterOrder(){
   if(!S.masterOrder)S.masterOrder={techs:[],trainees:[],managers:[]};
   if(!S.masterOrder.managers)S.masterOrder.managers=[];
@@ -505,7 +573,6 @@ function syncQueues(){
   if(!S.rotationState.mgQueue)S.rotationState.mgQueue=[];
   S.rotationState.mgQueue=syncQ(S.rotationState.mgQueue,mgIds,S.masterOrder.managers);
 }
-
 function consume(q){if(!q.length)return null;const id=q.shift();q.push(id);return id;}
 function consumeWithDayOff(q){const o=q.shift();q.push(o);const c=q.shift();q.push(c);return{offId:o,coverId:c};}
 function pickWeekday(y,m,d,ds){
@@ -536,7 +603,6 @@ function pickTrainee(y,m,d,ds){
   const{offId,coverId}=consumeWithDayOff(q);return{trainee:coverId,offTrainee:offId};
 }
 function pickManager(){const q=S.rotationState.mgQueue;if(!q.length)return null;return consume(q);}
-
 function resolveHolidayTech(scheduledId,holKey,year,holsThisMonth,allIds){
   if(!scheduledId)return scheduledId;
   function violates(id){
@@ -559,7 +625,6 @@ function recordHoliday(techId,holKey,year){
   if(!S.holidayHistory[techId][holKey])S.holidayHistory[techId][holKey]=[];
   if(!S.holidayHistory[techId][holKey].includes(year))S.holidayHistory[techId][holKey].push(year);
 }
-
 function generateMonth(y,m){
   const techs=S.technicians.filter(t=>t.role==='Technician');
   const trainees=S.technicians.filter(t=>t.role==='Trainee');
@@ -604,7 +669,6 @@ function generateMonth(y,m){
   }
   S.schedules[mkey]=sched;return true;
 }
-
 function getEffective(ds){
   const[y,m]=ds.split('-').map(Number);
   const base=(S.schedules[mkKey(y,m)]||{})[ds];if(!base)return null;
@@ -618,7 +682,6 @@ function getEffectiveMgr(mondayKey){
   if(ov&&ov.manager)return{manager:ov.manager,isOverride:true,reason:ov.reason};
   const mgr=S.mgrSchedule[mondayKey];return mgr?{manager:mgr,isOverride:false}:null;
 }
-
 function renderCalendar(){
   const mkey=mkKey(curY,curM),hasSched=!!S.schedules[mkey];
   document.getElementById('monthTitle').textContent=new Date(curY,curM-1,1).toLocaleString('default',{month:'long',year:'numeric'});
@@ -659,7 +722,6 @@ function renderCalendar(){
   }
   renderMgrSection(hasSched);
 }
-
 function renderMgrSection(hasSched){
   const managers=S.technicians.filter(t=>t.role==='Manager');
   const mgrSection=document.getElementById('mgrSection');
@@ -685,9 +747,7 @@ function renderMgrSection(hasSched){
     </div>`;
   }).join('');
 }
-
 function changeMonth(dir){curM+=dir;if(curM>12){curM=1;curY++;}if(curM<1){curM=12;curY--;}renderCalendar();}
-
 function openOverrideModal(ds,eff,hol){
   overrideDateStr=ds;
   const[y,m,d]=ds.split('-').map(Number);
@@ -735,7 +795,6 @@ function saveMgrOverride(){
   if(mgr&&mgr!==base)S.mgrOverrides[key]={manager:mgr,reason};else delete S.mgrOverrides[key];
   save();closeModal('mgrOverrideModal');renderCalendar();showAlert('schedAlert','Manager override saved.','success');
 }
-
 function renderQueuePreview(elId,queue,isMgr){
   const el=document.getElementById(elId);if(!queue||!queue.length){el.innerHTML='<span style="color:#5f5e5a;">Empty</span>';return;}
   el.innerHTML=queue.map((id,i)=>`<span class="${i===0?(isMgr?'mgr-next':'next'):''}">${tName(id)}</span>`).join(' → ');
@@ -802,7 +861,6 @@ function suggestNextMonth(){
   const last=months[months.length-1];let[y,m]=last.split('-').map(Number);m++;if(m>12){m=1;y++;}
   document.getElementById('genMonthInput').value=`${y}-${p2(m)}`;
 }
-
 function countMonth(mk){
   const sched=S.schedules[mk];if(!sched)return{};
   const counts={};S.technicians.forEach(t=>{counts[t.id]={weekday:0,primary:0,backup:0,trainee:0,manager:0};});
@@ -852,7 +910,6 @@ function renderHolidayHistory(){
   });
   wrap.innerHTML=html+`</tbody></table></div>`;
 }
-
 function onRoleChange(){
   const role=document.getElementById('techRole').value;
   document.getElementById('jetsGroup').style.display=role==='Technician'?'block':'none';
@@ -910,7 +967,6 @@ function removeTech(id){
   if(!confirm('Remove this person?'))return;
   S.technicians=S.technicians.filter(t=>t.id!==id);delete S.daysOff[id];save();renderTechTable();
 }
-
 function showPanel(name){
   document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
@@ -949,7 +1005,11 @@ function clearAllData(){
   save();renderCalendar();renderTechTable();
 }
 
-async function init(){await loadState();ensureMasterOrder();syncQueues();renderCalendar();}
-init();
+// Handle redirect after login
+async function start(){
+  try{await msalInstance.handleRedirectPromise();}catch(e){console.error(e);}
+  await initApp();
+}
+start();
 </script>
 </body></html>
