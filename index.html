@@ -366,7 +366,7 @@ async function getToken(){
 
 async function signIn(){
   try{
-    await msalInstance.loginRedirect({scopes:SCOPES});
+    await msalInstance.loginRedirect({scopes:SCOPES,prompt:'select_account'});
   }catch(e){console.error('Sign in failed:',e);}
 }
 
@@ -1008,8 +1008,18 @@ function clearAllData(){
 
 // Handle redirect after login
 async function start(){
-  try{await msalInstance.handleRedirectPromise();}catch(e){console.error(e);}
-  await initApp();
+  try{
+    // Must initialize before any other MSAL call
+    await msalInstance.initialize();
+    // Handle the redirect response if returning from login
+    const response = await msalInstance.handleRedirectPromise();
+    if(response){
+      console.log('Redirect response received, user:', response.account.username);
+    }
+    await initApp();
+  }catch(e){
+    console.error('Start error:',e);
+  }
 }
 start();
 </script>
