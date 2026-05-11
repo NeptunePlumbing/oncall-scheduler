@@ -440,7 +440,9 @@ async function loadState(){
   try{
     const siteId=await getSiteId();
     const listId=await getListId();
-    const data=await graphFetch(`${GRAPH_BASE}/sites/${siteId}/lists/${listId}/items?$filter=fields/Title eq '${ITEM_TITLE}'&$expand=fields`);
+    const data=await graphFetch(`${GRAPH_BASE}/sites/${siteId}/lists/${listId}/items?$filter=fields/Title eq '${ITEM_TITLE}'&$expand=fields`,{
+      headers:{'Prefer':'HonorNonIndexedQueriesWarningMayFailRandomly'}
+    });
     if(data.value&&data.value.length>0){
       spItemId=data.value[0].id;
       const json=data.value[0].fields.SchedulerJSON;
