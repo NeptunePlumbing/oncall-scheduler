@@ -352,7 +352,6 @@ let spSiteId=null;
 let spListId=null;
 let spItemId=null;
 
-// getToken defined below in start block
 
 async function signIn(){
   try{
@@ -411,9 +410,7 @@ async function getSiteId(){
   const hostname=new URL(SITE_URL).hostname;
   const sitePath=new URL(SITE_URL).pathname;
   const url=`${GRAPH_BASE}/sites/${hostname}:${sitePath}`;
-  console.log('getSiteId URL:', url);
   const data=await graphFetch(url);
-  console.log('getSiteId response:', JSON.stringify(data).substring(0,200));
   spSiteId=data.id;
   return spSiteId;
 }
@@ -422,13 +419,10 @@ async function getListId(){
   if(spListId)return spListId;
   const siteId=await getSiteId();
   const url=`${GRAPH_BASE}/sites/${siteId}/lists?$filter=displayName eq '${LIST_NAME}'`;
-  console.log('getListId URL:', url);
   const data=await graphFetch(url);
-  console.log('getListId response:', JSON.stringify(data).substring(0,300));
   if(!data.value||!data.value.length){
     // Try fetching all lists to see what's available
     const allLists=await graphFetch(`${GRAPH_BASE}/sites/${siteId}/lists`);
-    console.log('All lists:', allLists.value.map(l=>l.displayName).join(', '));
     throw new Error(`List "${LIST_NAME}" not found. Available lists: ${allLists.value.map(l=>l.displayName).join(', ')}`);
   }
   spListId=data.value[0].id;
@@ -1014,69 +1008,18 @@ function clearAllData(){
 }
 
 async function start(){
-  // Show a visible status so we know the script is running
-  document.body.innerHTML += '<div id="dbg" style="position:fixed;bottom:0;left:0;right:0;background:#1a1a1a;color:#fff;font-size:11px;padding:8px 12px;z-index:9999;font-family:monospace;max-height:120px;overflow-y:auto;"></div>';
-  function dbg(msg){
-    console.log(msg);
-    const el=document.getElementById('dbg');
-    if(el)el.innerHTML+=msg+'<br>';
-  }
-
   try{
-    dbg('1. Initializing MSAL...');
     await msalInstance.initialize();
-    dbg('2. MSAL initialized. Handling redirect...');
-
     let response=null;
-    try{
-      response = await msalInstance.handleRedirectPromise();
-    }catch(e){
-      dbg('Redirect error: '+e.message);
-    }
-
-    dbg('3. Redirect handled. Response: '+(response?'YES account='+response.account.username:'null'));
-
-    if(response && response.account){
+    try{response=await msalInstance.handleRedirectPromise();}catch(e){console.error('Redirect error:',e.message);}
+    if(response&&response.account){
       msalInstance.setActiveAccount(response.account);
-      dbg('4. Active account set: '+response.account.username);
     }
-
-    const allAccounts = msalInstance.getAllAccounts();
-    dbg('5. All accounts: '+allAccounts.length);
-
-    const activeAccount = msalInstance.getActiveAccount();
-    dbg('6. Active account: '+(activeAccount?activeAccount.username:'none'));
-
-    if(allAccounts.length > 0 || activeAccount){
-      dbg('7. Calling initApp...');
-      await initApp();
-      dbg('8. initApp complete.');
-    } else {
-      dbg('7. No accounts found - showing sign in banner.');
-      document.getElementById('authBanner').style.display='flex';
-      document.getElementById('appShell').style.display='none';
-    }
+    await initApp();
   }catch(e){
     console.error('Start error:',e);
     document.getElementById('authBanner').style.display='flex';
     document.getElementById('appShell').style.display='none';
-  }
-}
-
-async function getToken(){
-  let account = msalInstance.getActiveAccount();
-  if(!account){
-    const accounts = msalInstance.getAllAccounts();
-    if(!accounts.length) throw new Error('Not signed in');
-    account = accounts[0];
-    msalInstance.setActiveAccount(account);
-  }
-  try{
-    const res=await msalInstance.acquireTokenSilent({scopes:SCOPES,account});
-    return res.accessToken;
-  }catch(e){
-    await msalInstance.acquireTokenRedirect({scopes:SCOPES});
-    return null;
   }
 }
 
