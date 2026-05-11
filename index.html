@@ -410,7 +410,10 @@ async function getSiteId(){
   if(spSiteId)return spSiteId;
   const hostname=new URL(SITE_URL).hostname;
   const sitePath=new URL(SITE_URL).pathname;
-  const data=await graphFetch(`${GRAPH_BASE}/sites/${hostname}:${sitePath}`);
+  const url=`${GRAPH_BASE}/sites/${hostname}:${sitePath}`;
+  console.log('getSiteId URL:', url);
+  const data=await graphFetch(url);
+  console.log('getSiteId response:', JSON.stringify(data).substring(0,200));
   spSiteId=data.id;
   return spSiteId;
 }
@@ -418,8 +421,16 @@ async function getSiteId(){
 async function getListId(){
   if(spListId)return spListId;
   const siteId=await getSiteId();
-  const data=await graphFetch(`${GRAPH_BASE}/sites/${siteId}/lists?$filter=displayName eq '${LIST_NAME}'`);
-  if(!data.value||!data.value.length)throw new Error(`List "${LIST_NAME}" not found`);
+  const url=`${GRAPH_BASE}/sites/${siteId}/lists?$filter=displayName eq '${LIST_NAME}'`;
+  console.log('getListId URL:', url);
+  const data=await graphFetch(url);
+  console.log('getListId response:', JSON.stringify(data).substring(0,300));
+  if(!data.value||!data.value.length){
+    // Try fetching all lists to see what's available
+    const allLists=await graphFetch(`${GRAPH_BASE}/sites/${siteId}/lists`);
+    console.log('All lists:', allLists.value.map(l=>l.displayName).join(', '));
+    throw new Error(`List "${LIST_NAME}" not found. Available lists: ${allLists.value.map(l=>l.displayName).join(', ')}`);
+  }
   spListId=data.value[0].id;
   return spListId;
 }
@@ -437,9 +448,9 @@ async function loadState(){
     }
     setSaveIndicator('');
   }catch(e){
-    console.error('Load error:',e);
+    console.error('Load error:',e.message);
     setSaveIndicator('error');
-    showAlert('schedAlert','Could not load data from SharePoint. Check your connection and try refreshing.','error');
+    showAlert('schedAlert','SharePoint error: '+e.message,'error');
     try{const r=localStorage.getItem('neptune_fallback');if(r)S=JSON.parse(r);}catch(_){}
   }
 }
