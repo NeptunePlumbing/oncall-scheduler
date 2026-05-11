@@ -387,6 +387,23 @@ async function initApp(){
 }
 
 // ── Graph API Storage Layer ───────────────────────────────────────
+async function getToken(){
+  let account=msalInstance.getActiveAccount();
+  if(!account){
+    const accounts=msalInstance.getAllAccounts();
+    if(!accounts.length)throw new Error('Not signed in');
+    account=accounts[0];
+    msalInstance.setActiveAccount(account);
+  }
+  try{
+    const res=await msalInstance.acquireTokenSilent({scopes:SCOPES,account});
+    return res.accessToken;
+  }catch(e){
+    await msalInstance.acquireTokenRedirect({scopes:SCOPES});
+    return null;
+  }
+}
+
 async function graphFetch(url,options={}){
   const token=await getToken();
   const res=await fetch(url,{
