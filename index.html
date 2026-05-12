@@ -974,21 +974,22 @@ function renderTechTable(){
   S.technicians.forEach((t,idx)=>{
     const dc=(S.daysOff[t.id]||[]).length;
     const isFirst=idx===0,isLast=idx===S.technicians.length-1;
-    const upBtn='<button class="btn sm" onclick="moveTech(''+t.id+'',-1)"'+(isFirst?' disabled style="opacity:.3"':'')+' title="Move up">&#8593;</button>';
-    const dnBtn='<button class="btn sm" onclick="moveTech(''+t.id+'',1)"'+(isLast?' disabled style="opacity:.3"':'')+' title="Move down">&#8595;</button>';
-    const jetsCell=t.role==='Technician'?'<span class="badge '+(t.jets==='Jets'?'badge-green':'badge-gray')+'">'+t.jets+'</span>':'—';
+    const tid=t.id;
+    const upBtn=`<button class="btn sm" onclick="moveTech('${tid}',-1)" ${isFirst?'disabled style="opacity:.3"':''} title="Move up">&#8593;</button>`;
+    const dnBtn=`<button class="btn sm" onclick="moveTech('${tid}',1)" ${isLast?'disabled style="opacity:.3"':''} title="Move down">&#8595;</button>`;
+    const jetsCell=t.role==='Technician'?`<span class="badge ${t.jets==='Jets'?'badge-green':'badge-gray'}">${t.jets}</span>`:'—';
     const roleClass=t.role==='Trainee'?'badge-purple':t.role==='Manager'?'badge-coral':'badge-blue';
-    html+='<tr>'
-      +'<td style="font-weight:500;">'+t.name+'</td>'
-      +'<td><span class="badge '+roleClass+'">'+t.role+'</span></td>'
-      +'<td>'+jetsCell+'</td>'
-      +'<td>'+(t.birthday||'—')+'</td>'
-      +'<td>'+(t.role==='Manager'?'—':dc)+'</td>'
-      +'<td style="text-align:right;white-space:nowrap;">'
+    html+=`<tr>`
+      +`<td style="font-weight:500;">${t.name}</td>`
+      +`<td><span class="badge ${roleClass}">${t.role}</span></td>`
+      +`<td>${jetsCell}</td>`
+      +`<td>${t.birthday||'—'}</td>`
+      +`<td>${t.role==='Manager'?'—':dc}</td>`
+      +`<td style="text-align:right;white-space:nowrap;">`
         +upBtn+' '+dnBtn
-        +' <button class="btn sm" onclick="editTech(''+t.id+'')">Edit</button>'
-        +' <button class="btn sm danger" onclick="removeTech(''+t.id+'')">Remove</button>'
-      +'</td></tr>';
+        +` <button class="btn sm" onclick="editTech('${tid}')">Edit</button>`
+        +` <button class="btn sm danger" onclick="removeTech('${tid}')">Remove</button>`
+      +`</td></tr>`;
   });
   html+=`</tbody></table>`;wrap.innerHTML=html;
   const nonMgr=S.technicians.filter(t=>t.role!=='Manager');
