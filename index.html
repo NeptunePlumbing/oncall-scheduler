@@ -241,14 +241,42 @@ input:focus,select:focus{outline:2px solid #378ADD;outline-offset:1px}
           </div>
         </div>
         <div id="rotationStatus" class="rot-indicator"><div style="color:#5f5e5a;">Loading…</div></div>
-        <div style="font-size:11px;font-weight:500;color:#5f5e5a;margin-bottom:4px;text-transform:uppercase;letter-spacing:.4px;">Weekday Queue</div>
-        <div class="queue-preview" id="wdQueuePreview" style="margin-bottom:10px;"></div>
-        <div style="font-size:11px;font-weight:500;color:#5f5e5a;margin-bottom:4px;text-transform:uppercase;letter-spacing:.4px;">Weekend Queue</div>
-        <div class="queue-preview" id="weQueuePreview" style="margin-bottom:10px;"></div>
-        <div style="font-size:11px;font-weight:500;color:#5f5e5a;margin-bottom:4px;text-transform:uppercase;letter-spacing:.4px;">Trainee Queue</div>
-        <div class="queue-preview" id="trQueuePreview" style="margin-bottom:10px;"></div>
-        <div style="font-size:11px;font-weight:500;color:#5f5e5a;margin-bottom:4px;text-transform:uppercase;letter-spacing:.4px;">Manager Queue</div>
-        <div class="queue-preview" id="mgQueuePreview" style="margin-bottom:16px;"></div>
+        <div style="font-size:11px;font-weight:500;color:#5f5e5a;margin-bottom:8px;text-transform:uppercase;letter-spacing:.4px;">Rotation Queues</div>
+        <div style="font-size:12px;color:#5f5e5a;margin-bottom:12px;">Use the dropdowns to set who is next up in each rotation. The queue order will adjust accordingly.</div>
+        <div id="queueControls" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;">
+          <div>
+            <div class="form-label">Weekday — next up</div>
+            <div style="display:flex;gap:6px;align-items:center;">
+              <select id="wdQueueSel" style="flex:1;"></select>
+              <button class="btn sm primary" onclick="setQueueStart('wd')">Set</button>
+            </div>
+            <div class="queue-preview" id="wdQueuePreview" style="margin-top:6px;"></div>
+          </div>
+          <div>
+            <div class="form-label">Weekend — next up</div>
+            <div style="display:flex;gap:6px;align-items:center;">
+              <select id="weQueueSel" style="flex:1;"></select>
+              <button class="btn sm primary" onclick="setQueueStart('we')">Set</button>
+            </div>
+            <div class="queue-preview" id="weQueuePreview" style="margin-top:6px;"></div>
+          </div>
+          <div>
+            <div class="form-label">Trainee — next up</div>
+            <div style="display:flex;gap:6px;align-items:center;">
+              <select id="trQueueSel" style="flex:1;"></select>
+              <button class="btn sm primary" onclick="setQueueStart('tr')">Set</button>
+            </div>
+            <div class="queue-preview" id="trQueuePreview" style="margin-top:6px;"></div>
+          </div>
+          <div>
+            <div class="form-label">Manager — next up</div>
+            <div style="display:flex;gap:6px;align-items:center;">
+              <select id="mgQueueSel" style="flex:1;"></select>
+              <button class="btn sm primary" onclick="setQueueStart('mg')">Set</button>
+            </div>
+            <div class="queue-preview" id="mgQueuePreview" style="margin-top:6px;"></div>
+          </div>
+        </div>
         <div style="font-size:11px;font-weight:500;color:#5f5e5a;margin-bottom:9px;text-transform:uppercase;letter-spacing:.4px;">Generated Months</div>
         <div id="monthList"></div>
         <div style="margin-top:13px;padding-top:13px;border-top:0.5px solid rgba(0,0,0,.12);">
@@ -861,6 +889,7 @@ function renderGeneratePanel(){
   renderQueuePreview('weQueuePreview',rs.weQueue,false);
   renderQueuePreview('trQueuePreview',rs.trQueue,false);
   renderQueuePreview('mgQueuePreview',rs.mgQueue,true);
+  populateQueueDropdowns();
   const months=Object.keys(S.schedules).sort(),listEl=document.getElementById('monthList');
   if(!months.length){listEl.innerHTML='<div class="empty-state" style="padding:16px;">No schedules generated yet.</div>';return;}
   listEl.innerHTML=months.map(mk=>{
@@ -904,6 +933,56 @@ function suggestNextMonth(){
   if(!months.length){document.getElementById('genMonthInput').value=`${now.getFullYear()}-${p2(now.getMonth()+1)}`;return;}
   const last=months[months.length-1];let[y,m]=last.split('-').map(Number);m++;if(m>12){m=1;y++;}
   document.getElementById('genMonthInput').value=`${y}-${p2(m)}`;
+}
+
+function populateQueueDropdowns(){
+  const techs=S.technicians.filter(t=>t.role==='Technician');
+  const trainees=S.technicians.filter(t=>t.role==='Trainee');
+  const managers=S.technicians.filter(t=>t.role==='Manager');
+  const rs=S.rotationState;
+
+  function fillSel(elId,pool,queue){
+    const el=document.getElementById(elId);if(!el)return;
+    const currentNext=queue.length?queue[0]:null;
+    el.innerHTML=pool.map(t=>`<option value="${t.id}"${t.id===currentNext?' selected':''}>${t.name}</option>`).join('');
+  }
+  fillSel('wdQueueSel',techs,rs.wdQueue);
+  fillSel('weQueueSel',techs,rs.weQueue);
+  fillSel('trQueueSel',trainees,rs.trQueue);
+  fillSel('mgQueueSel',managers,rs.mgQueue||[]);
+}
+
+function setQueueStart(queueKey){
+  const selMap={wd:'wdQueueSel',we:'weQueueSel',tr:'trQueueSel',mg:'mgQueueSel'};
+  const queueMap={wd:'wdQueue',we:'weQueue',tr:'trQueue',mg:'mgQueue'};
+  const sel=document.getElementById(selMap[queueKey]);
+  if(!sel||!sel.value)return;
+  const targetId=sel.value;
+  const queue=S.rotationState[queueMap[queueKey]];
+  if(!queue||!queue.length)return;
+  if(queue[0]===targetId){showAlert('genAlert','This technician is already next up.','success');return;}
+
+  // Warn if schedules already exist
+  const hasMonths=Object.keys(S.schedules).length>0;
+  if(hasMonths){
+    const queueNames={wd:'Weekday',we:'Weekend',tr:'Trainee',mg:'Manager'};
+    const techName=tName(targetId);
+    if(!confirm(`Warning: You have already generated ${Object.keys(S.schedules).length} month(s). Changing the ${queueNames[queueKey]} queue start to "${techName}" may cause the next generated month to be out of sequence with prior months.
+
+Proceed anyway?`))return;
+  }
+
+  // Rotate the queue until targetId is at the front
+  const idx=queue.indexOf(targetId);
+  if(idx===-1){showAlert('genAlert','Technician not found in queue.','warn');return;}
+  // Splice: move elements before targetId to the end
+  const rotated=[...queue.slice(idx),...queue.slice(0,idx)];
+  S.rotationState[queueMap[queueKey]]=rotated;
+
+  save();
+  renderGeneratePanel();
+  const queueNames={wd:'Weekday',we:'Weekend',tr:'Trainee',mg:'Manager'};
+  showAlert('genAlert',`${queueNames[queueKey]} queue updated. ${tName(targetId)} is now next up.`,'success');
 }
 function countMonth(mk){
   const sched=S.schedules[mk];if(!sched)return{};
