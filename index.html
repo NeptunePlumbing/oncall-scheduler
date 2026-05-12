@@ -629,42 +629,64 @@ function pickWeekday(y,m,d,ds){
   const{offId,coverId}=consumeWithDayOff(q);return{tech:coverId,off:offId};
 }
 
-// Like pickWeekday but also skips techs in the excludeIds list (adjacent weekend crew).
-// The rotation still advances normally — excluded techs are treated like unavailable for this slot only.
+// Like pickWeekday but skips techs in excludeIds (adjacency rule).
+// KEY DISTINCTION from consumeWithDayOff:
+//   - Day off: tech is unavailable, cover tech uses their turn, off tech re-inserts right after cover
+//   - Adjacency exclusion: tech is available but ineligible for THIS slot only.
+//     They do NOT use their turn. They stay at the front and are served next weekday.
+// So: if front tech is excluded-only (not actually off), we scan forward for a substitute
+//     WITHOUT advancing the front tech's position. The substitute is pulled from later
+//     in the queue using a temporary removal approach.
 function pickWeekdayExcluding(y,m,d,ds,excludeIds){
-  const q=S.rotationState.wdQueue;if(!q.length)return{tech:null,off:null};
+  const q=S.rotationState.wdQueue;
+  if(!q.length)return{tech:null,off:null};
   if(!excludeIds||!excludeIds.length)return pickWeekday(y,m,d,ds);
 
-  const front=getTech(q[0]);
-  const frontExcluded=excludeIds.includes(q[0]);
+  const frontId=q[0];
+  const front=getTech(frontId);
+  const actuallyOff=isUnavail(front,y,m,d,ds);
+  const adjacencyExcluded=excludeIds.includes(frontId);
 
-  if(!isUnavail(front,y,m,d,ds)&&!frontExcluded){
-    // Normal consume
+  if(!actuallyOff&&!adjacencyExcluded){
+    // Normal case — front tech is available and not excluded
     return{tech:consume(q),off:null};
   }
 
-  // Front is either unavailable (day off/birthday) or excluded (adjacent weekend)
-  // Use consumeWithDayOff so rotation advances correctly
-  if(q.length<2)return{tech:consume(q),off:null};
-
-  // If front is only excluded (not actually off), we still want to advance rotation
-  // by treating them as if they had a day off for this slot
-  const isActuallyOff=isUnavail(front,y,m,d,ds);
-
-  if(isActuallyOff||frontExcluded){
-    // Scan forward to find first non-unavailable, non-excluded tech
-    // but still use consumeWithDayOff to properly advance rotation
+  if(actuallyOff&&!adjacencyExcluded){
+    // Tech is genuinely off — use normal day-off slide logic
+    if(q.length<2)return{tech:consume(q),off:null};
     const{offId,coverId}=consumeWithDayOff(q);
-    // If coverId is also excluded, keep scanning
-    if(excludeIds.includes(coverId)&&q.length>=1){
-      // coverId went to back; front of queue is next candidate
-      // Just use coverId anyway — we can't skip infinitely
-      // (edge case: entire pool is on adjacent weekend, which shouldn't happen)
-    }
-    return{tech:coverId,off:isActuallyOff?offId:null};
+    return{tech:coverId,off:offId};
   }
 
-  return{tech:consume(q),off:null};
+  if(adjacencyExcluded&&!actuallyOff){
+    // Tech is only excluded due to adjacency — they keep their queue position.
+    // Find the next non-excluded, non-unavailable tech in the queue
+    // and temporarily pull them out to serve this slot.
+    // The excluded tech stays at front and will be served next weekday normally.
+    let subIdx=-1;
+    for(let i=1;i<q.length;i++){
+      const cand=getTech(q[i]);
+      if(!isUnavail(cand,y,m,d,ds)&&!excludeIds.includes(q[i])){
+        subIdx=i;break;
+      }
+    }
+    if(subIdx===-1){
+      // No valid substitute found — serve the excluded tech anyway (edge case)
+      return{tech:consume(q),off:null};
+    }
+    // Pull substitute out of queue, move to back after their normal position
+    const subId=q.splice(subIdx,1)[0];
+    // Push substitute to back (they used their turn)
+    q.push(subId);
+    // Front tech (adjacency excluded) stays at position 0 — served next weekday
+    return{tech:subId,off:null};
+  }
+
+  // Both actually off AND adjacency excluded — treat as day off
+  if(q.length<2)return{tech:consume(q),off:null};
+  const{offId,coverId}=consumeWithDayOff(q);
+  return{tech:coverId,off:offId};
 }
 function pickWeekendPair(y,m,d,ds){
   const q=S.rotationState.weQueue;
