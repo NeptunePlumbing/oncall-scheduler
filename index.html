@@ -184,7 +184,7 @@ input:focus,select:focus{outline:2px solid #378ADD;outline-offset:1px}
         <div class="card-header">
           <div>
             <div style="font-weight:500;font-size:15px;">Technician Roster</div>
-            <div style="font-size:11px;color:#5f5e5a;margin-top:2px;">Changes apply to the next generated month</div>
+            <div style="font-size:11px;color:#5f5e5a;margin-top:2px;">Changes apply to the next generated month. Use ↑↓ arrows to reorder rotation.</div>
           </div>
           <button class="btn primary sm no-print" onclick="showAddTechModal()">+ Add Person</button>
         </div>
@@ -659,15 +659,33 @@ function generateMonth(y,m){
     for(let d=1;d<=days;d++)mondays.add(getMondayKey(y,m,d));
     mondays.forEach(mk2=>{if(!S.mgrSchedule[mk2])S.mgrSchedule[mk2]=pickManager();});
   }
+  let wkndTraineeBlock=null; // trainee picked on Friday, carried through Sat+Sun
+
   for(let d=1;d<=days;d++){
     const wday=dow(y,m,d),ds=dstr(y,m,d),isWeekend=wday===0||wday===6,hol=holMap[d]||null;
     if(!isWeekend){
       const{tech,off}=pickWeekday(y,m,d,ds);let assigned=tech;
       if(hol&&assigned){assigned=resolveHolidayTech(assigned,hol.key,y,holsThisMonth,techIds);holsThisMonth.push({techId:assigned,holKey:hol.key,day:d});recordHoliday(assigned,hol.key,y);}
-      sched[ds]={type:'weekday',tech:assigned,intendedTech:tech,offTech:off};
+
+      // Friday: also pick trainee block (Fri+Sat+Sun)
+      if(wday===5){
+        const{trainee,offTrainee}=pickTrainee(y,m,d,ds);
+        wkndTraineeBlock={trainee,offTrainee};
+        sched[ds]={type:'weekday',tech:assigned,intendedTech:tech,offTech:off,trainee:trainee,offTrainee:offTrainee};
+      } else {
+        sched[ds]={type:'weekday',tech:assigned,intendedTech:tech,offTech:off};
+      }
     }else if(wday===6){
       const{primary,backup,offPrimary,offBackup}=pickWeekendPair(y,m,d,ds);
-      const{trainee,offTrainee}=pickTrainee(y,m,d,ds);
+      // Reuse trainee picked on Friday; if no Friday block (e.g. month starts on Sat), pick now
+      let trainee,offTrainee;
+      if(wkndTraineeBlock){
+        trainee=wkndTraineeBlock.trainee;
+        offTrainee=wkndTraineeBlock.offTrainee;
+      } else {
+        const picked=pickTrainee(y,m,d,ds);
+        trainee=picked.trainee;offTrainee=picked.offTrainee;
+      }
       let aP=primary,aB=backup;
       if(hol){
         aP=resolveHolidayTech(aP,hol.key,y,holsThisMonth,techIds);
@@ -675,8 +693,9 @@ function generateMonth(y,m){
         if(aP){holsThisMonth.push({techId:aP,holKey:hol.key,day:d});recordHoliday(aP,hol.key,y);}
         if(aB&&aB!==aP){holsThisMonth.push({techId:aB,holKey:hol.key,day:d});recordHoliday(aB,hol.key,y);}
       }
-      satEntry={type:'weekend',primary:aP,backup:aB,trainee,intendedPrimary:primary,intendedBackup:backup,intendedTrainee:trainee,offPrimary,offBackup,offTrainee};
+      satEntry={type:'weekend',primary:aP,backup:aB,trainee,intendedPrimary:primary,intendedBackup:backup,intendedTrainee:wkndTraineeBlock?wkndTraineeBlock.trainee:trainee,offPrimary,offBackup,offTrainee};
       sched[ds]={...satEntry};
+      wkndTraineeBlock=null; // reset after Saturday consumes it
     }else if(wday===0){
       if(satEntry){sched[ds]={...satEntry};
         if(hol){
@@ -723,6 +742,12 @@ function renderCalendar(){
       if(eff.type==='weekday'){
         if(base.offTech)html+=`<div class="cal-entry dayoff">${tName(base.offTech)} (off)</div>`;
         html+=`<div class="cal-entry weekday${ov.tech?' is-override':''}">${tName(eff.tech)}</div>`;
+        // Friday: also show trainee
+        if(eff.trainee){
+          if(base.offTrainee)html+=`<div class="cal-entry dayoff">${tName(base.offTrainee)} (off)</div>`;
+          const fri_tr=getTech(eff.trainee);
+          html+=`<div class="cal-entry trainee${ov.trainee?' is-override':''}">T: ${fri_tr?fri_tr.name:'—'}</div>`;
+        }
       }else if(eff.type==='weekend'){
         if(base.offPrimary)html+=`<div class="cal-entry dayoff">${tName(base.offPrimary)} (off)</div>`;
         const p=getTech(eff.primary);
@@ -885,7 +910,15 @@ function countMonth(mk){
   const counts={};S.technicians.forEach(t=>{counts[t.id]={weekday:0,primary:0,backup:0,trainee:0,manager:0};});
   Object.keys(sched).forEach(ds=>{
     const eff=getEffective(ds);if(!eff)return;
-    if(eff.type==='weekday'&&eff.tech){if(!counts[eff.tech])counts[eff.tech]={weekday:0,primary:0,backup:0,trainee:0,manager:0};counts[eff.tech].weekday++;}
+    if(eff.type==='weekday'&&eff.tech){
+      if(!counts[eff.tech])counts[eff.tech]={weekday:0,primary:0,backup:0,trainee:0,manager:0};
+      counts[eff.tech].weekday++;
+      // Friday trainee
+      if(eff.trainee){
+        if(!counts[eff.trainee])counts[eff.trainee]={weekday:0,primary:0,backup:0,trainee:0,manager:0};
+        counts[eff.trainee].trainee++;
+      }
+    }
     if(eff.type==='weekend'){['primary','backup','trainee'].forEach(slot=>{const id=eff[slot];if(!id)return;if(!counts[id])counts[id]={weekday:0,primary:0,backup:0,trainee:0,manager:0};counts[id][slot]++;});}
   });
   const[y,m]=mk.split('-').map(Number),days=daysInMonth(y,m),mondaysSeen=new Set();
@@ -938,9 +971,15 @@ function renderTechTable(){
   const wrap=document.getElementById('techTableWrap');
   if(!S.technicians.length){wrap.innerHTML='<div class="empty-state">No technicians added yet.</div>';document.getElementById('daysOffCard').style.display='none';return;}
   let html=`<table class="tech-table"><thead><tr><th>Name</th><th>Role</th><th>Jetting</th><th>Birthday</th><th>Days Off</th><th></th></tr></thead><tbody>`;
-  S.technicians.forEach(t=>{
+  S.technicians.forEach((t,idx)=>{
     const dc=(S.daysOff[t.id]||[]).length;
-    html+=`<tr><td style="font-weight:500;">${t.name}</td><td><span class="badge ${t.role==='Trainee'?'badge-purple':t.role==='Manager'?'badge-coral':'badge-blue'}">${t.role}</span></td><td>${t.role==='Technician'?`<span class="badge ${t.jets==='Jets'?'badge-green':'badge-gray'}">${t.jets}</span>`:'—'}</td><td>${t.birthday||'—'}</td><td>${t.role==='Manager'?'—':dc}</td><td style="text-align:right;white-space:nowrap;"><button class="btn sm" onclick="editTech('${t.id}')">Edit</button> <button class="btn sm danger" onclick="removeTech('${t.id}')">Remove</button></td></tr>`;
+    const isFirst=idx===0,isLast=idx===S.technicians.length-1;
+    html+=`<tr><td style="font-weight:500;">${t.name}</td><td><span class="badge ${t.role==='Trainee'?'badge-purple':t.role==='Manager'?'badge-coral':'badge-blue'}">${t.role}</span></td><td>${t.role==='Technician'?`<span class="badge ${t.jets==='Jets'?'badge-green':'badge-gray'}">${t.jets}</span>`:'—'}</td><td>${t.birthday||'—'}</td><td>${t.role==='Manager'?'—':dc}</td><td style="text-align:right;white-space:nowrap;">
+      <button class="btn sm" onclick="moveTech('${t.id}',-1)" ${isFirst?'disabled':''} title="Move up" style="padding:4px 7px;${isFirst?'opacity:.3;':'}">&#8593;</button>
+      <button class="btn sm" onclick="moveTech('${t.id}',1)" ${isLast?'disabled':''} title="Move down" style="padding:4px 7px;${isLast?'opacity:.3;':'}">&#8595;</button>
+      <button class="btn sm" onclick="editTech('${t.id}')">Edit</button>
+      <button class="btn sm danger" onclick="removeTech('${t.id}')">Remove</button>
+    </td></tr>`;
   });
   html+=`</tbody></table>`;wrap.innerHTML=html;
   const nonMgr=S.technicians.filter(t=>t.role!=='Manager');
@@ -985,6 +1024,48 @@ function saveTechnician(){
 function removeTech(id){
   if(!confirm('Remove this person?'))return;
   S.technicians=S.technicians.filter(t=>t.id!==id);delete S.daysOff[id];save();renderTechTable();
+}
+
+function moveTech(id,dir){
+  const idx=S.technicians.findIndex(t=>t.id===id);
+  if(idx===-1)return;
+  const newIdx=idx+dir;
+  if(newIdx<0||newIdx>=S.technicians.length)return;
+  // Swap in main technicians array
+  const tmp=S.technicians[idx];
+  S.technicians[idx]=S.technicians[newIdx];
+  S.technicians[newIdx]=tmp;
+  // Also update all three queue arrays to reflect new order
+  function swapInQueue(queue){
+    const qi=queue.indexOf(id);
+    const qj=queue.indexOf(S.technicians[idx].id);
+    if(qi===-1||qj===-1)return;
+    const t=queue[qi];queue[qi]=queue[qj];queue[qj]=t;
+  }
+  // Only swap in queues if both techs are present
+  const otherId=S.technicians[idx].id;
+  function swapIds(queue,idA,idB){
+    const ia=queue.indexOf(idA),ib=queue.indexOf(idB);
+    if(ia===-1||ib===-1)return;
+    const t=queue[ia];queue[ia]=queue[ib];queue[ib]=t;
+  }
+  // The tech that was at newIdx is now at idx — swap their queue positions
+  swapIds(S.rotationState.wdQueue,id,S.technicians[idx].id);
+  swapIds(S.rotationState.weQueue,id,S.technicians[idx].id);
+  // Update masterOrder to match new technician order
+  const role=S.technicians[idx].role;
+  if(role==='Technician'){
+    S.masterOrder.techs=S.technicians.filter(t=>t.role==='Technician').map(t=>t.id);
+  } else if(role==='Trainee'){
+    S.masterOrder.trainees=S.technicians.filter(t=>t.role==='Trainee').map(t=>t.id);
+    swapIds(S.rotationState.trQueue,id,S.technicians[idx].id);
+  } else if(role==='Manager'){
+    S.masterOrder.managers=S.technicians.filter(t=>t.role==='Manager').map(t=>t.id);
+    swapIds(S.rotationState.mgQueue,id,S.technicians[idx].id);
+  }
+  save();
+  renderTechTable();
+  showAlert('techAlert','Rotation order updated. Takes effect on the next generated month.','success');
 }
 function showPanel(name){
   document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
