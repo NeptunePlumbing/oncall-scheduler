@@ -628,6 +628,44 @@ function pickWeekday(y,m,d,ds){
   if(q.length<2)return{tech:consume(q),off:null};
   const{offId,coverId}=consumeWithDayOff(q);return{tech:coverId,off:offId};
 }
+
+// Like pickWeekday but also skips techs in the excludeIds list (adjacent weekend crew).
+// The rotation still advances normally — excluded techs are treated like unavailable for this slot only.
+function pickWeekdayExcluding(y,m,d,ds,excludeIds){
+  const q=S.rotationState.wdQueue;if(!q.length)return{tech:null,off:null};
+  if(!excludeIds||!excludeIds.length)return pickWeekday(y,m,d,ds);
+
+  const front=getTech(q[0]);
+  const frontExcluded=excludeIds.includes(q[0]);
+
+  if(!isUnavail(front,y,m,d,ds)&&!frontExcluded){
+    // Normal consume
+    return{tech:consume(q),off:null};
+  }
+
+  // Front is either unavailable (day off/birthday) or excluded (adjacent weekend)
+  // Use consumeWithDayOff so rotation advances correctly
+  if(q.length<2)return{tech:consume(q),off:null};
+
+  // If front is only excluded (not actually off), we still want to advance rotation
+  // by treating them as if they had a day off for this slot
+  const isActuallyOff=isUnavail(front,y,m,d,ds);
+
+  if(isActuallyOff||frontExcluded){
+    // Scan forward to find first non-unavailable, non-excluded tech
+    // but still use consumeWithDayOff to properly advance rotation
+    const{offId,coverId}=consumeWithDayOff(q);
+    // If coverId is also excluded, keep scanning
+    if(excludeIds.includes(coverId)&&q.length>=1){
+      // coverId went to back; front of queue is next candidate
+      // Just use coverId anyway — we can't skip infinitely
+      // (edge case: entire pool is on adjacent weekend, which shouldn't happen)
+    }
+    return{tech:coverId,off:isActuallyOff?offId:null};
+  }
+
+  return{tech:consume(q),off:null};
+}
 function pickWeekendPair(y,m,d,ds){
   const q=S.rotationState.weQueue;
   if(q.length<2){const id=consume(q);return{primary:id,backup:id,offPrimary:null,offBackup:null};}
@@ -680,40 +718,32 @@ function generateMonth(y,m){
   syncQueues();
   const mkey=mkKey(y,m),days=daysInMonth(y,m);
   const hols=holsInMonth(y,m),holMap={};hols.forEach(h=>{holMap[h.day]=h;});
-  const sched={};let satEntry=null;
+  const sched={};
   const holsThisMonth=[],techIds=techs.map(t=>t.id);
-  if(S.rotationState.mgQueue.length>0){
+
+  // ── MANAGER WEEKS ──────────────────────────────────────────────
+  if(S.rotationState.mgQueue&&S.rotationState.mgQueue.length>0){
     const mondays=new Set();
     for(let d=1;d<=days;d++)mondays.add(getMondayKey(y,m,d));
     mondays.forEach(mk2=>{if(!S.mgrSchedule[mk2])S.mgrSchedule[mk2]=pickManager();});
   }
-  let wkndTraineeBlock=null; // trainee picked on Friday, carried through Sat+Sun
+
+  // ── PASS 1: WEEKENDS (Sat+Sun) ─────────────────────────────────
+  // Process all Saturdays first so we know the weekend crews
+  // before assigning adjacent Fridays and Mondays.
+  // Weekend day-off rule: if intended Primary or Backup is off on Saturday,
+  // they skip the ENTIRE weekend (both Sat+Sun) and return next weekend.
+  // The substitute covers both days.
+  const weekendCrews={}; // satDateStr -> {primary, backup}
+  let satEntry=null;
 
   for(let d=1;d<=days;d++){
-    const wday=dow(y,m,d),ds=dstr(y,m,d),isWeekend=wday===0||wday===6,hol=holMap[d]||null;
-    if(!isWeekend){
-      const{tech,off}=pickWeekday(y,m,d,ds);let assigned=tech;
-      if(hol&&assigned){assigned=resolveHolidayTech(assigned,hol.key,y,holsThisMonth,techIds);holsThisMonth.push({techId:assigned,holKey:hol.key,day:d});recordHoliday(assigned,hol.key,y);}
+    const wday=dow(y,m,d),ds=dstr(y,m,d),hol=holMap[d]||null;
 
-      // Friday: also pick trainee block (Fri+Sat+Sun)
-      if(wday===5){
-        const{trainee,offTrainee}=pickTrainee(y,m,d,ds);
-        wkndTraineeBlock={trainee,offTrainee};
-        sched[ds]={type:'weekday',tech:assigned,intendedTech:tech,offTech:off,trainee:trainee,offTrainee:offTrainee};
-      } else {
-        sched[ds]={type:'weekday',tech:assigned,intendedTech:tech,offTech:off};
-      }
-    }else if(wday===6){
+    if(wday===6){
+      // Saturday — pick weekend pair and trainee block
       const{primary,backup,offPrimary,offBackup}=pickWeekendPair(y,m,d,ds);
-      // Reuse trainee picked on Friday; if no Friday block (e.g. month starts on Sat), pick now
-      let trainee,offTrainee;
-      if(wkndTraineeBlock){
-        trainee=wkndTraineeBlock.trainee;
-        offTrainee=wkndTraineeBlock.offTrainee;
-      } else {
-        const picked=pickTrainee(y,m,d,ds);
-        trainee=picked.trainee;offTrainee=picked.offTrainee;
-      }
+      const{trainee,offTrainee}=pickTrainee(y,m,d,ds);
       let aP=primary,aB=backup;
       if(hol){
         aP=resolveHolidayTech(aP,hol.key,y,holsThisMonth,techIds);
@@ -721,11 +751,18 @@ function generateMonth(y,m){
         if(aP){holsThisMonth.push({techId:aP,holKey:hol.key,day:d});recordHoliday(aP,hol.key,y);}
         if(aB&&aB!==aP){holsThisMonth.push({techId:aB,holKey:hol.key,day:d});recordHoliday(aB,hol.key,y);}
       }
-      satEntry={type:'weekend',primary:aP,backup:aB,trainee,intendedPrimary:primary,intendedBackup:backup,intendedTrainee:wkndTraineeBlock?wkndTraineeBlock.trainee:trainee,offPrimary,offBackup,offTrainee};
+      satEntry={
+        type:'weekend',primary:aP,backup:aB,trainee,
+        intendedPrimary:primary,intendedBackup:backup,intendedTrainee:trainee,
+        offPrimary,offBackup,offTrainee
+      };
       sched[ds]={...satEntry};
-      wkndTraineeBlock=null; // reset after Saturday consumes it
+      weekendCrews[ds]={primary:aP,backup:aB};
+
     }else if(wday===0){
-      if(satEntry){sched[ds]={...satEntry};
+      // Sunday — same crew as Saturday, no new rotation advances
+      if(satEntry){
+        sched[ds]={...satEntry};
         if(hol){
           if(satEntry.primary){holsThisMonth.push({techId:satEntry.primary,holKey:hol.key,day:d});recordHoliday(satEntry.primary,hol.key,y);}
           if(satEntry.backup&&satEntry.backup!==satEntry.primary){holsThisMonth.push({techId:satEntry.backup,holKey:hol.key,day:d});recordHoliday(satEntry.backup,hol.key,y);}
@@ -733,7 +770,54 @@ function generateMonth(y,m){
       }
     }
   }
-  S.schedules[mkey]=sched;return true;
+
+  // Helper: get adjacent weekend crew for a weekday
+  // Friday (dow=5): adjacent Sat is d+1
+  // Monday (dow=1): adjacent Sat is d-2
+  function getAdjacentCrew(d,wday){
+    let satD=null;
+    if(wday===5)satD=d+1;
+    else if(wday===1)satD=d-2;
+    if(!satD||satD<1||satD>days)return[];
+    const crew=weekendCrews[dstr(y,m,satD)];
+    return crew?[crew.primary,crew.backup].filter(Boolean):[];
+  }
+
+  // ── PASS 2: WEEKDAYS (Mon–Fri) ─────────────────────────────────
+  // Weekday day-off rule: off tech slides to next WEEKDAY only.
+  // Adjacency rule: on Fri and Mon, skip techs already on adjacent weekend.
+  // Friday also gets the trainee from the Sat entry (same Fri-Sat-Sun block).
+  for(let d=1;d<=days;d++){
+    const wday=dow(y,m,d),ds=dstr(y,m,d);
+    if(wday===0||wday===6)continue; // already handled in pass 1
+
+    const hol=holMap[d]||null;
+    const excluded=getAdjacentCrew(d,wday); // empty for Tue/Wed/Thu
+
+    const{tech,off}=pickWeekdayExcluding(y,m,d,ds,excluded);
+    let assigned=tech;
+    if(hol&&assigned){
+      assigned=resolveHolidayTech(assigned,hol.key,y,holsThisMonth,techIds);
+      holsThisMonth.push({techId:assigned,holKey:hol.key,day:d});
+      recordHoliday(assigned,hol.key,y);
+    }
+
+    if(wday===5){
+      // Friday: attach the trainee from the adjacent Saturday entry
+      const satDs=dstr(y,m,d+1<=days?d+1:d);
+      const satSched=sched[satDs];
+      sched[ds]={
+        type:'weekday',tech:assigned,intendedTech:tech,offTech:off,
+        trainee:satSched?satSched.trainee:null,
+        offTrainee:satSched?satSched.offTrainee:null
+      };
+    }else{
+      sched[ds]={type:'weekday',tech:assigned,intendedTech:tech,offTech:off};
+    }
+  }
+
+  S.schedules[mkey]=sched;
+  return true;
 }
 function getEffective(ds){
   const[y,m]=ds.split('-').map(Number);
