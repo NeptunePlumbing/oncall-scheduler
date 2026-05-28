@@ -551,7 +551,7 @@ const HOLIDAYS=[
 ];
 let S={
   technicians:[],schedules:{},overrides:{},
-  rotationState:{wdQueue:[],weQueue:[],trQueue:[],mgQueue:[]},
+  rotationState:{wdQueue:[],weQueue:[],trQueue:[],mgQueue:[],wdCycleCount:0},
   masterOrder:{techs:[],trainees:[],managers:[]},
   holidayHistory:{},daysOff:{},mgrSchedule:{},mgrOverrides:{}
 };
@@ -624,6 +624,27 @@ function consume(q){if(!q.length)return null;const id=q.shift();q.push(id);retur
 function consumeWithDayOff(q){const o=q.shift();q.push(o);const c=q.shift();q.push(c);return{offId:o,coverId:c};}
 function pickWeekday(y,m,d,ds){
   const q=S.rotationState.wdQueue;if(!q.length)return{tech:null,off:null};
+
+  // ── Cycle offset logic ─────────────────────────────────────────
+  // When tech count is a multiple of 5, each full cycle lands on
+  // the same weekday pattern permanently. After every complete cycle
+  // (every N assignments where N = queue length), we shift the queue
+  // forward by 2 to break the alignment. Only fires when N % 5 === 0.
+  if(!S.rotationState.wdCycleCount) S.rotationState.wdCycleCount = 0;
+  const qLen = q.length;
+  if(qLen > 0 && qLen % 5 === 0){
+    S.rotationState.wdCycleCount++;
+    if(S.rotationState.wdCycleCount >= qLen){
+      // One full cycle completed — apply offset of 2
+      S.rotationState.wdCycleCount = 0;
+      const OFFSET = 2;
+      for(let i=0;i<OFFSET;i++){
+        const id=q.shift();q.push(id);
+      }
+    }
+  }
+  // ─────────────────────────────────────────────────────────────
+
   if(!isUnavail(getTech(q[0]),y,m,d,ds))return{tech:consume(q),off:null};
   if(q.length<2)return{tech:consume(q),off:null};
   const{offId,coverId}=consumeWithDayOff(q);return{tech:coverId,off:offId};
@@ -1023,7 +1044,7 @@ function deleteMonth(mk){
   replayRotation();save();renderGeneratePanel();renderCalendar();
 }
 function replayRotation(){
-  S.rotationState={wdQueue:[],weQueue:[],trQueue:[],mgQueue:[]};S.holidayHistory={};S.mgrSchedule={};
+  S.rotationState={wdQueue:[],weQueue:[],trQueue:[],mgQueue:[],wdCycleCount:0};S.holidayHistory={};S.mgrSchedule={};
   syncQueues();Object.keys(S.schedules).sort().forEach(mk=>{const[y,m]=mk.split('-').map(Number);generateMonth(y,m);});
 }
 function generateNextMonth(){
@@ -1296,7 +1317,7 @@ function importDataPrompt(){
 }
 function clearAllData(){
   if(!confirm('Erase all data?'))return;
-  S={technicians:[],schedules:{},overrides:{},rotationState:{wdQueue:[],weQueue:[],trQueue:[],mgQueue:[]},masterOrder:{techs:[],trainees:[],managers:[]},holidayHistory:{},daysOff:{},mgrSchedule:{},mgrOverrides:{}};
+  S={technicians:[],schedules:{},overrides:{},rotationState:{wdQueue:[],weQueue:[],trQueue:[],mgQueue:[],wdCycleCount:0},masterOrder:{techs:[],trainees:[],managers:[]},holidayHistory:{},daysOff:{},mgrSchedule:{},mgrOverrides:{}};
   save();renderCalendar();renderTechTable();
 }
 
