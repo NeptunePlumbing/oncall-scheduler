@@ -625,29 +625,33 @@ function consumeWithDayOff(q){const o=q.shift();q.push(o);const c=q.shift();q.pu
 function pickWeekday(y,m,d,ds){
   const q=S.rotationState.wdQueue;if(!q.length)return{tech:null,off:null};
 
-  // ── Cycle offset logic ─────────────────────────────────────────
-  // When tech count is a multiple of 5, each full cycle lands on
-  // the same weekday pattern permanently. After every complete cycle
-  // (every N assignments where N = queue length), we shift the queue
-  // forward by 2 to break the alignment. Only fires when N % 5 === 0.
+  // ── Perform the assignment first ───────────────────────────────
+  let result;
+  if(!isUnavail(getTech(q[0]),y,m,d,ds)){result={tech:consume(q),off:null};}
+  else if(q.length<2){result={tech:consume(q),off:null};}
+  else{const{offId,coverId}=consumeWithDayOff(q);result={tech:coverId,off:offId};}
+
+  // ── Cycle offset logic (fires AFTER each assignment) ───────────
+  // When tech count is a multiple of 5, cycles align perfectly with
+  // weeks so the same tech always lands on the same weekday.
+  // After every complete cycle (N assignments where N = queue length)
+  // we shift the queue forward by 2 to break the alignment.
+  // Firing after the consume means the offset takes effect at the
+  // START of the next cycle, not mid-cycle.
   if(!S.rotationState.wdCycleCount) S.rotationState.wdCycleCount = 0;
   const qLen = q.length;
   if(qLen > 0 && qLen % 5 === 0){
     S.rotationState.wdCycleCount++;
     if(S.rotationState.wdCycleCount >= qLen){
-      // One full cycle completed — apply offset of 2
+      // One full cycle just completed — shift queue before next cycle starts
       S.rotationState.wdCycleCount = 0;
       const OFFSET = 2;
-      for(let i=0;i<OFFSET;i++){
-        const id=q.shift();q.push(id);
-      }
+      for(let i=0;i<OFFSET;i++){const id=q.shift();q.push(id);}
     }
   }
-  // ─────────────────────────────────────────────────────────────
+  // ──────────────────────────────────────────────────────────────
 
-  if(!isUnavail(getTech(q[0]),y,m,d,ds))return{tech:consume(q),off:null};
-  if(q.length<2)return{tech:consume(q),off:null};
-  const{offId,coverId}=consumeWithDayOff(q);return{tech:coverId,off:offId};
+  return result;
 }
 
 // Like pickWeekday but skips techs in excludeIds (adjacency rule).
