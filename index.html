@@ -770,9 +770,9 @@ function pickWeekdayExcluding(y,m,d,ds,excludeIds){
   }
 
   if(actuallyOff&&!adjacencyExcluded){
-    // Tech is genuinely off — use normal day-off slide logic
+    // Tech is genuinely off — use makeup day-off handler so they jump to front
     if(q.length<2)return{tech:consume(q),off:null};
-    const{offId,coverId}=consumeWithDayOff(q);
+    const{offId,coverId}=consumeWeekdayDayOff(q);
     return{tech:coverId,off:offId};
   }
 
@@ -800,9 +800,9 @@ function pickWeekdayExcluding(y,m,d,ds,excludeIds){
     return{tech:subId,off:null};
   }
 
-  // Both actually off AND adjacency excluded — treat as day off
+  // Both actually off AND adjacency excluded — treat as day off with makeup
   if(q.length<2)return{tech:consume(q),off:null};
-  const{offId,coverId}=consumeWithDayOff(q);
+  const{offId,coverId}=consumeWeekdayDayOff(q);
   return{tech:coverId,off:offId};
 }
 // Returns historical Primary and Backup counts for a tech across all generated months.
