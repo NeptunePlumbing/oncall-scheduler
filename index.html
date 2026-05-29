@@ -805,19 +805,65 @@ function pickWeekdayExcluding(y,m,d,ds,excludeIds){
   const{offId,coverId}=consumeWithDayOff(q);
   return{tech:coverId,off:offId};
 }
+// Returns historical Primary and Backup counts for a tech across all generated months.
+// Uses effective (overridden) values. Counts Saturdays only to avoid double-counting.
+function getWeekendCounts(techId){
+  let primary=0,backup=0;
+  Object.keys(S.schedules).forEach(mk=>{
+    const sched=S.schedules[mk];
+    const[y,m]=mk.split('-').map(Number);
+    Object.keys(sched).forEach(ds=>{
+      const[dy,dm,dd]=ds.split('-').map(Number);
+      if(dow(dy,dm,dd)!==6)return; // Saturdays only
+      // Get effective assignment (respects overrides)
+      const eff=getEffective(ds);
+      if(!eff||eff.type!=='weekend')return;
+      if(eff.primary===techId)primary++;
+      if(eff.backup===techId)backup++;
+    });
+  });
+  return{primary,backup,total:primary+backup};
+}
+
+// Determines which of two techs gets Primary vs Backup.
+// Role assignment is purely fairness-driven:
+// 1. Give Primary to whoever has fewer Primary days historically
+// 2. Tiebreaker: give Primary to whoever has fewer total weekend days
+// Jets capability does not affect role — it only affects pair selection (handled upstream).
+function assignWeekendRoles(id1,id2){
+  const c1=getWeekendCounts(id1);
+  const c2=getWeekendCounts(id2);
+  let shouldSwap=false;
+
+  // Primary count: give Primary to whoever has fewer
+  if(c1.primary>c2.primary){
+    shouldSwap=true;
+  }else if(c1.primary===c2.primary){
+    // Tied — use total weekend days as tiebreaker
+    if(c1.total>c2.total) shouldSwap=true;
+  }
+
+  if(!shouldSwap)return{primary:id1,backup:id2};
+  return{primary:id2,backup:id1};
+}
+
 function pickWeekendPair(y,m,d,ds){
   const q=S.rotationState.weQueue;
   if(q.length<2){const id=consume(q);return{primary:id,backup:id,offPrimary:null,offBackup:null};}
-  let primary,offPrimary=null;
-  if(!isUnavail(getTech(q[0]),y,m,d,ds)){primary=consume(q);}
-  else if(q.length>=2){const r=consumeWithDayOff(q);primary=r.coverId;offPrimary=r.offId;}
-  else primary=consume(q);
-  let backup,offBackup=null;
-  if(q.length&&!isUnavail(getTech(q[0]),y,m,d,ds)&&q[0]!==primary){backup=consume(q);}
-  else if(q.length>=2){const r=consumeWithDayOff(q);backup=r.coverId;offBackup=r.offId;}
-  else if(q.length)backup=consume(q);else backup=primary;
-  const pT=getTech(primary),bT=getTech(backup);
-  if(pT&&bT&&pT.jets!=='Jets'&&bT.jets==='Jets')return{primary:backup,backup:primary,offPrimary,offBackup};
+
+  // Determine which two techs work this weekend
+  let cand1,offPrimary=null;
+  if(!isUnavail(getTech(q[0]),y,m,d,ds)){cand1=consume(q);}
+  else if(q.length>=2){const r=consumeWithDayOff(q);cand1=r.coverId;offPrimary=r.offId;}
+  else cand1=consume(q);
+
+  let cand2,offBackup=null;
+  if(q.length&&!isUnavail(getTech(q[0]),y,m,d,ds)&&q[0]!==cand1){cand2=consume(q);}
+  else if(q.length>=2){const r=consumeWithDayOff(q);cand2=r.coverId;offBackup=r.offId;}
+  else if(q.length)cand2=consume(q);else cand2=cand1;
+
+  // Assign roles using jets + fairness logic
+  const{primary,backup}=assignWeekendRoles(cand1,cand2);
   return{primary,backup,offPrimary,offBackup};
 }
 function pickTrainee(y,m,d,ds){
