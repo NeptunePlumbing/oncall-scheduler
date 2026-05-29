@@ -592,6 +592,9 @@ function ensureMasterOrder(){
   if(!S.masterOrder.managers)S.masterOrder.managers=[];
   if(!S.mgrSchedule)S.mgrSchedule={};
   if(!S.mgrOverrides)S.mgrOverrides={};
+  if(!S.rotationState)S.rotationState={wdQueue:[],weQueue:[],trQueue:[],mgQueue:[],wdCycleCount:0,wdMakeupPending:[]};
+  if(!S.rotationState.wdMakeupPending)S.rotationState.wdMakeupPending=[];
+  if(S.rotationState.wdCycleCount===undefined)S.rotationState.wdCycleCount=0;
 }
 function syncQueues(){
   ensureMasterOrder();
@@ -1231,9 +1234,14 @@ function generateNextMonth(){
   const inp=document.getElementById('genMonthInput').value;if(!inp){showAlert('genAlert','Please select a month.','warn');return;}
   const[y,m]=inp.split('-').map(Number),mkey=mkKey(y,m);
   if(S.schedules[mkey]){if(!confirm('Regenerate this month? Overrides are preserved.'))return;}
-  const ok=generateMonth(y,m);if(!ok)return;
-  save();renderGeneratePanel();curY=y;curM=m;showPanel('schedule');
-  showAlert('schedAlert',`Schedule generated for ${new Date(y,m-1,1).toLocaleString('default',{month:'long',year:'numeric'})}.`,'success');
+  try{
+    const ok=generateMonth(y,m);if(!ok)return;
+    save();renderGeneratePanel();curY=y;curM=m;showPanel('schedule');
+    showAlert('schedAlert',`Schedule generated for ${new Date(y,m-1,1).toLocaleString('default',{month:'long',year:'numeric'})}.`,'success');
+  }catch(err){
+    console.error('generateMonth error:',err);
+    showAlert('genAlert','Error generating schedule: '+err.message,'error');
+  }
 }
 function suggestNextMonth(){
   const months=Object.keys(S.schedules).sort(),now=new Date();
