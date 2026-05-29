@@ -551,7 +551,7 @@ const HOLIDAYS=[
 ];
 let S={
   technicians:[],schedules:{},overrides:{},
-  rotationState:{wdQueue:[],weQueue:[],trQueue:[],mgQueue:[],wdCycleCount:0},
+  rotationState:{wdQueue:[],weQueue:[],trQueue:[],mgQueue:[],wdCycleCount:0,wdMakeupPending:[]},
   masterOrder:{techs:[],trainees:[],managers:[]},
   holidayHistory:{},daysOff:{},mgrSchedule:{},mgrOverrides:{}
 };
@@ -621,12 +621,96 @@ function syncQueues(){
   S.rotationState.mgQueue=syncQ(S.rotationState.mgQueue,mgIds,S.masterOrder.managers);
 }
 function consume(q){if(!q.length)return null;const id=q.shift();q.push(id);return id;}
-function consumeWithDayOff(q){const o=q.shift();q.push(o);const c=q.shift();q.push(c);return{offId:o,coverId:c};}
+function consumeWithDayOff(q){const o=q.shift();q.push(o);const c=q.shift();q.push(c);return{offId:o,coverId:c}
+
+// Weekday-specific day-off handler implementing makeup day logic (Option B):
+// Off tech jumps to FRONT of queue for immediate makeup.
+// After makeup day, they re-insert at their original relative position
+// (just before the tech that was originally behind them = anchorId).
+function consumeWeekdayDayOff(q){
+  if(q.length<2)return{offId:q[0],coverId:consume(q)};
+  const offId=q[0];
+  // anchorId = tech originally at position 1 (just behind off tech).
+  // After makeup, off tech re-inserts just before anchorId, restoring their relative order.
+  const anchorId=q.length>=2?q[1]:null;
+  // Remove off tech from front
+  q.shift();
+  // Cover tech now at front — consume normally (their turn)
+  const coverId=consume(q);
+  // Insert off tech at front for immediate makeup
+  q.unshift(offId);
+  // Record makeup pending
+  if(!S.rotationState.wdMakeupPending)S.rotationState.wdMakeupPending=[];
+  S.rotationState.wdMakeupPending.push({techId:offId,anchorId:anchorId});
+  return{offId,coverId};
+};}
 function pickWeekday(y,m,d,ds){
   const q=S.rotationState.wdQueue;if(!q.length)return{tech:null,off:null};
-  if(!isUnavail(getTech(q[0]),y,m,d,ds))return{tech:consume(q),off:null};
+  if(!S.rotationState.wdMakeupPending) S.rotationState.wdMakeupPending=[];
+
+  const frontId=q[0];
+  const frontTech=getTech(frontId);
+  const isMakeup=S.rotationState.wdMakeupPending.length>0&&
+                 S.rotationState.wdMakeupPending[0].techId===frontId;
+
+  if(!isUnavail(frontTech,y,m,d,ds)){
+    // Tech is available — consume them
+    q.shift();
+
+    if(isMakeup){
+      // This is a makeup day — restore tech to original position after consuming
+      const makeup=S.rotationState.wdMakeupPending.shift();
+      const anchorId=makeup.anchorId;
+      if(anchorId&&anchorId!==frontId){
+        // Find anchor in queue and insert just before it (restoring original relative order)
+        const anchorIdx=q.indexOf(anchorId);
+        if(anchorIdx>=0){
+          q.splice(anchorIdx,0,frontId);
+        }else{
+          // Anchor no longer in queue (removed/departed) — just append to back
+          q.push(frontId);
+        }
+      }else{
+        // No anchor — push to back
+        q.push(frontId);
+      }
+    }else{
+      // Normal consumption — go to back
+      q.push(frontId);
+    }
+    return{tech:frontId,off:null};
+  }
+
+  // Front tech is unavailable (day off or birthday)
   if(q.length<2)return{tech:consume(q),off:null};
-  const{offId,coverId}=consumeWithDayOff(q);return{tech:coverId,off:offId};
+
+  if(isMakeup){
+    // Tech needs makeup but is also unavailable today — skip to next day
+    // Remove makeup flag temporarily, find substitute, re-add flag
+    const makeup=S.rotationState.wdMakeupPending.shift();
+    q.shift(); // remove makeup tech from front temporarily
+    // Find next available non-makeup tech
+    let subIdx=-1;
+    for(let i=0;i<q.length;i++){
+      if(!isUnavail(getTech(q[i]),y,m,d,ds)){subIdx=i;break;}
+    }
+    if(subIdx===-1){
+      // No sub — put makeup tech back and use them anyway
+      q.unshift(makeup.techId);
+      S.rotationState.wdMakeupPending.unshift(makeup);
+      return{tech:consume(q),off:null};
+    }
+    const subId=q.splice(subIdx,1)[0];
+    q.push(subId); // sub goes to back
+    // Re-insert makeup tech at front for next day
+    q.unshift(makeup.techId);
+    S.rotationState.wdMakeupPending.unshift(makeup);
+    return{tech:subId,off:null};
+  }
+
+  // Normal day-off — use weekday-specific handler for makeup logic
+  const{offId,coverId}=consumeWeekdayDayOff(q);
+  return{tech:coverId,off:offId};
 }
 
 // Called after EVERY weekday assignment to track cycle completion.
@@ -666,7 +750,23 @@ function pickWeekdayExcluding(y,m,d,ds,excludeIds){
 
   if(!actuallyOff&&!adjacencyExcluded){
     // Normal case — front tech is available and not excluded
-    return{tech:consume(q),off:null};
+    // Check if this is a makeup day and handle restoration
+    if(!S.rotationState.wdMakeupPending) S.rotationState.wdMakeupPending=[];
+    const isMakeup=S.rotationState.wdMakeupPending.length>0&&
+                   S.rotationState.wdMakeupPending[0].techId===frontId;
+    q.shift();
+    if(isMakeup){
+      const makeup=S.rotationState.wdMakeupPending.shift();
+      const anchorId=makeup.anchorId;
+      if(anchorId&&anchorId!==frontId){
+        const anchorIdx=q.indexOf(anchorId);
+        if(anchorIdx>=0){q.splice(anchorIdx,0,frontId);}
+        else{q.push(frontId);}
+      }else{q.push(frontId);}
+    }else{
+      q.push(frontId);
+    }
+    return{tech:frontId,off:null};
   }
 
   if(actuallyOff&&!adjacencyExcluded){
@@ -1042,7 +1142,7 @@ function deleteMonth(mk){
   replayRotation();save();renderGeneratePanel();renderCalendar();
 }
 function replayRotation(){
-  S.rotationState={wdQueue:[],weQueue:[],trQueue:[],mgQueue:[],wdCycleCount:0};S.holidayHistory={};S.mgrSchedule={};
+  S.rotationState={wdQueue:[],weQueue:[],trQueue:[],mgQueue:[],wdCycleCount:0,wdMakeupPending:[]};S.holidayHistory={};S.mgrSchedule={};
   syncQueues();Object.keys(S.schedules).sort().forEach(mk=>{const[y,m]=mk.split('-').map(Number);generateMonth(y,m);});
 }
 function generateNextMonth(){
@@ -1315,7 +1415,7 @@ function importDataPrompt(){
 }
 function clearAllData(){
   if(!confirm('Erase all data?'))return;
-  S={technicians:[],schedules:{},overrides:{},rotationState:{wdQueue:[],weQueue:[],trQueue:[],mgQueue:[],wdCycleCount:0},masterOrder:{techs:[],trainees:[],managers:[]},holidayHistory:{},daysOff:{},mgrSchedule:{},mgrOverrides:{}};
+  S={technicians:[],schedules:{},overrides:{},rotationState:{wdQueue:[],weQueue:[],trQueue:[],mgQueue:[],wdCycleCount:0,wdMakeupPending:[]},masterOrder:{techs:[],trainees:[],managers:[]},holidayHistory:{},daysOff:{},mgrSchedule:{},mgrOverrides:{}};
   save();renderCalendar();renderTechTable();
 }
 
