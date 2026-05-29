@@ -851,18 +851,49 @@ function pickWeekendPair(y,m,d,ds){
   const q=S.rotationState.weQueue;
   if(q.length<2){const id=consume(q);return{primary:id,backup:id,offPrimary:null,offBackup:null};}
 
-  // Determine which two techs work this weekend
+  // ── Pick cand1 (first tech) ───────────────────────────────────
   let cand1,offPrimary=null;
   if(!isUnavail(getTech(q[0]),y,m,d,ds)){cand1=consume(q);}
   else if(q.length>=2){const r=consumeWithDayOff(q);cand1=r.coverId;offPrimary=r.offId;}
   else cand1=consume(q);
 
+  // ── Pick cand2 (second tech) ──────────────────────────────────
   let cand2,offBackup=null;
   if(q.length&&!isUnavail(getTech(q[0]),y,m,d,ds)&&q[0]!==cand1){cand2=consume(q);}
   else if(q.length>=2){const r=consumeWithDayOff(q);cand2=r.coverId;offBackup=r.offId;}
   else if(q.length)cand2=consume(q);else cand2=cand1;
 
-  // Assign roles using jets + fairness logic
+  // ── Jets guarantee: ensure at least one of the pair can jet ───
+  // If neither cand1 nor cand2 can jet, find the next jets-capable
+  // tech in the remaining queue and swap them in for cand2.
+  // cand2 is re-inserted at the position where the jets tech was,
+  // so no tech loses or gains their turn unfairly.
+  const cand1Jets=getTech(cand1)&&getTech(cand1).jets==='Jets';
+  const cand2Jets=getTech(cand2)&&getTech(cand2).jets==='Jets';
+
+  if(!cand1Jets&&!cand2Jets){
+    // Neither can jet — find next jets-capable tech in queue
+    let jetsIdx=-1;
+    for(let i=0;i<q.length;i++){
+      const t=getTech(q[i]);
+      if(t&&t.jets==='Jets'&&!isUnavail(t,y,m,d,ds)&&q[i]!==cand1){
+        jetsIdx=i;break;
+      }
+    }
+    if(jetsIdx>=0){
+      // Swap jets tech with cand2's queue position
+      const jetsId=q.splice(jetsIdx,1)[0];
+      // Re-insert cand2 where the jets tech was (maintaining fair order)
+      q.splice(jetsIdx,0,cand2);
+      cand2=jetsId;
+      // Push jets tech through the consume cycle (they used their turn)
+      // Note: cand2 is back in queue at jetsIdx, will get their turn later
+    }
+    // If no jets tech available in queue, proceed with both non-jets
+    // (edge case: entire roster non-jets, nothing we can do)
+  }
+
+  // ── Assign roles using pure fairness logic ────────────────────
   const{primary,backup}=assignWeekendRoles(cand1,cand2);
   return{primary,backup,offPrimary,offBackup};
 }
