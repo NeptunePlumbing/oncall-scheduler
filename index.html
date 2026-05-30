@@ -624,7 +624,7 @@ function syncQueues(){
   S.rotationState.mgQueue=syncQ(S.rotationState.mgQueue,mgIds,S.masterOrder.managers);
 }
 function consume(q){if(!q.length)return null;const id=q.shift();q.push(id);return id;}
-function consumeWithDayOff(q){const o=q.shift();q.push(o);const c=q.shift();q.push(c);return{offId:o,coverId:c}
+function consumeWithDayOff(q){const o=q.shift();q.push(o);const c=q.shift();q.push(c);return{offId:o,coverId:c}}
 
 // Weekday-specific day-off handler implementing makeup day logic (Option B):
 // Off tech jumps to FRONT of queue for immediate makeup.
@@ -646,7 +646,7 @@ function consumeWeekdayDayOff(q){
   if(!S.rotationState.wdMakeupPending)S.rotationState.wdMakeupPending=[];
   S.rotationState.wdMakeupPending.push({techId:offId,anchorId:anchorId});
   return{offId,coverId};
-};}
+}
 function pickWeekday(y,m,d,ds){
   const q=S.rotationState.wdQueue;if(!q.length)return{tech:null,off:null};
   if(!S.rotationState.wdMakeupPending) S.rotationState.wdMakeupPending=[];
